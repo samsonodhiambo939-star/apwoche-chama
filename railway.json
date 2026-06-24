@@ -6,6 +6,7 @@
   "deploy": {
     "startCommand": "node server.js",
     "healthcheckPath": "/login",
+    "healthcheckTimeout": 300,
     "restartPolicyType": "always"
   }
 }
