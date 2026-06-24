@@ -1,0 +1,8 @@
+node_modules
+chama.db
+chama.db-shm
+chama.db-wal
+.git
+backups
+*.log
+.env
