@@ -1,0 +1,33 @@
+<% header('Loan Management'); %>
+<div class="flex mb-16">
+  <div><div class="page-title" style="margin-bottom:4px;">Loan Management</div><p class="text-muted text-sm">View and manage all member loans</p></div>
+  <form method="POST" action="/admin/loans/process-overdue" style="display:inline;">
+    <button class="btn btn-danger btn-lg">Apply 10% Default Penalty</button>
+  </form>
+</div>
+
+<div class="card">
+  <% if (loans.length === 0) { %>
+    <div class="empty-state">
+      <div class="empty-icon">🏦</div>
+      <div class="empty-text">No loans have been issued yet.</div>
+    </div>
+  <% } else { %>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Member</th><th style="text-align:right">Amount</th><th style="text-align:right">Amount Due</th><th style="text-align:right">Paid</th><th>Issued</th><th>Due</th><th>Status</th></tr>
+        <% loans.forEach(l => { %>
+          <tr>
+            <td><strong><%= l.first_name %> <%= l.last_name %></strong><br><span class="text-xs text-muted"><%= l.member_number %></span></td>
+            <td style="text-align:right;font-weight:700;">KES <%= Number(l.amount).toLocaleString() %></td>
+            <td style="text-align:right;font-weight:700;color:<%= l.status === 'active' ? '#ef4444' : '#22c55e' %>;">KES <%= Number(l.amount_due).toLocaleString() %></td>
+            <td style="text-align:right;">KES <%= Number(l.paid_amount).toLocaleString() %></td>
+            <td><%= l.issued_date %></td>
+            <td><%= l.due_date %></td>
+            <td><span class="badge badge-<%= l.status %>"><%= l.status %></span></td>
+          </tr>
+        <% }) %>
+      </table>
+    </div>
+  <% } %>
+</div>
