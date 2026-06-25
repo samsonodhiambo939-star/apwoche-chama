@@ -282,15 +282,29 @@
         <a href="/admin/welfare" class="<%= pageTitle === 'Welfare Requests' ? 'active' : '' %>">Welfare</a>
         <a href="/admin/welfare/registrations" class="<%= pageTitle === 'Welfare Registrations' ? 'active' : '' %>">Welfare Reg</a>
         <a href="/admin/minutes" class="<%= pageTitle === 'Meeting Minutes' ? 'active' : '' %>">Minutes</a>
-        <% if (user.memberId) { %><a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>" style="border-left:1px solid rgba(255,255,255,0.2);padding-left:12px;">My Account</a><% } %>
+        <% if (user.memberId) { %><a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>">My Account</a>
+        <a href="/member/welfare/register" class="<%= pageTitle === 'Welfare Registration' ? 'active' : '' %>">Register</a>
+        <a href="/member/welfare" class="<%= pageTitle === 'Welfare Request' ? 'active' : '' %>">Welfare Request</a><% } %>
       <% } else if (user.role === 'admin' && user.admin_role === 'secretary') { %>
         <a href="/admin/minutes" class="<%= pageTitle === 'Meeting Minutes' ? 'active' : '' %>">Minutes</a>
-        <% if (user.memberId) { %><a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>">My Account</a><% } %>
+        <% if (user.memberId) { %><a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>">My Account</a>
+        <a href="/member/contribute" class="<%= pageTitle === 'Make Payments' ? 'active' : '' %>">Pay</a>
+        <a href="/member/loans" class="<%= pageTitle === 'Loan Management' ? 'active' : '' %>">Loans</a>
+        <a href="/member/welfare" class="<%= pageTitle === 'Welfare Request' ? 'active' : '' %>">Welfare</a>
+        <a href="/member/welfare/register" class="<%= pageTitle === 'Welfare Registration' ? 'active' : '' %>">Register</a>
+        <a href="/withdraw" class="<%= pageTitle === 'Withdraw Funds' ? 'active' : '' %>">Withdraw</a>
+        <a href="/member/minutes" class="<%= pageTitle === 'Meeting Minutes' ? 'active' : '' %>">Minutes</a><% } %>
       <% } else if (user.role === 'admin' && user.admin_role === 'welfare') { %>
         <a href="/admin/welfare" class="<%= pageTitle === 'Welfare Requests' ? 'active' : '' %>">Welfare</a>
         <a href="/admin/welfare/registrations" class="<%= pageTitle === 'Welfare Registrations' ? 'active' : '' %>">Welfare Reg</a>
         <a href="/admin/minutes" class="<%= pageTitle === 'Meeting Minutes' ? 'active' : '' %>">Minutes</a>
-        <% if (user.memberId) { %><a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>">My Account</a><% } %>
+        <% if (user.memberId) { %><a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>">My Account</a>
+        <a href="/member/contribute" class="<%= pageTitle === 'Make Payments' ? 'active' : '' %>">Pay</a>
+        <a href="/member/loans" class="<%= pageTitle === 'Loan Management' ? 'active' : '' %>">Loans</a>
+        <a href="/member/welfare" class="<%= pageTitle === 'Welfare Request' ? 'active' : '' %>">Welfare</a>
+        <a href="/member/welfare/register" class="<%= pageTitle === 'Welfare Registration' ? 'active' : '' %>">Register</a>
+        <a href="/withdraw" class="<%= pageTitle === 'Withdraw Funds' ? 'active' : '' %>">Withdraw</a>
+        <a href="/member/minutes" class="<%= pageTitle === 'Meeting Minutes' ? 'active' : '' %>">Minutes</a><% } %>
       <% } else { %>
         <a href="/member" class="<%= pageTitle === 'My Dashboard' ? 'active' : '' %>">Dashboard</a>
         <a href="/member/contribute" class="<%= pageTitle === 'Make Payments' || pageTitle === 'Submit Contributions' ? 'active' : '' %>">Pay</a>
