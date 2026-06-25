@@ -481,15 +481,39 @@ const PORT = process.env.PORT || 3000;
   await seedMembers();
 
   const isPg = !!process.env.DATABASE_URL;
-  const cycleCount = isPg ? await db.prepare('SELECT COUNT(*) as c FROM cycles').get() : db.prepare('SELECT COUNT(*) as c FROM cycles').get();
+  const q = (sql, ...params) => isPg ? db.prepare(sql).run(...params) : db.prepare(sql).run(...params);
+  const g = (sql, ...params) => isPg ? db.prepare(sql).get(...params) : db.prepare(sql).get(...params);
+
+  let cycleCount = g('SELECT COUNT(*) as c FROM cycles');
   if (cycleCount.c === 0) {
     const today = new Date();
     const end = new Date(today);
     end.setDate(end.getDate() + 14);
-    const sql = isPg
-      ? "INSERT INTO cycles (start_date, end_date, is_open, is_processed) VALUES ($1, $2, 1, 0)"
-      : "INSERT INTO cycles (start_date, end_date, is_open, is_processed) VALUES (?, ?, 1, 0)";
+    const sql = isPg ? "INSERT INTO cycles (start_date, end_date, is_open, is_processed) VALUES ($1, $2, 1, 0)" : "INSERT INTO cycles (start_date, end_date, is_open, is_processed) VALUES (?, ?, 1, 0)";
     await db.prepare(sql).run(today.toISOString().split('T')[0], end.toISOString().split('T')[0]);
+  }
+
+  // Auto-close expired cycles and open next
+  const openCycle = g("SELECT * FROM cycles WHERE is_open = 1 ORDER BY id DESC LIMIT 1");
+  if (openCycle) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endDate = new Date(openCycle.end_date);
+    endDate.setDate(endDate.getDate() + 1);
+    endDate.setHours(0, 0, 0, 0);
+    if (today >= endDate) {
+      await q("UPDATE cycles SET is_open = 0, is_processed = 1 WHERE id = ?", openCycle.id);
+      const lastCycle = g("SELECT end_date FROM cycles ORDER BY id DESC LIMIT 1");
+      if (lastCycle) {
+        const newStart = new Date(lastCycle.end_date);
+        newStart.setDate(newStart.getDate() + 1);
+        const newEnd = new Date(newStart);
+        newEnd.setDate(newEnd.getDate() + 14);
+        const sql = isPg ? "INSERT INTO cycles (start_date, end_date, is_open, is_processed) VALUES ($1, $2, 1, 0)" : "INSERT INTO cycles (start_date, end_date, is_open, is_processed) VALUES (?, ?, 1, 0)";
+        await db.prepare(sql).run(newStart.toISOString().split('T')[0], newEnd.toISOString().split('T')[0]);
+        console.log('Auto-created new cycle');
+      }
+    }
   }
 
   app.listen(PORT, () => {
