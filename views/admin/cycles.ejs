@@ -33,12 +33,14 @@
 <div class="card">
   <div class="table-wrap">
     <table>
-      <tr><th>ID</th><th>Start Date</th><th>End Date</th><th>Status</th></tr>
+      <tr><th>ID</th><th>Start Date</th><th>End Date</th><th>Contributions</th><th>Total</th><th>Status</th></tr>
       <% cycles.forEach(c => { %>
         <tr>
           <td><span class="badge badge-closed">#<%= c.id %></span></td>
           <td><%= c.start_date %></td>
           <td><%= c.end_date %></td>
+          <td><%= c.contrib_count || 0 %></td>
+          <td class="font-mono">KES <%= Number(c.contrib_total || 0).toLocaleString() %></td>
           <td><span class="badge <%= c.is_open ? 'badge-open' : 'badge-closed' %>"><%= c.is_open ? 'Open' : 'Closed' %></span></td>
         </tr>
       <% }) %>
