@@ -38,8 +38,10 @@ router.post('/login', async (req, res) => {
   };
 
   if (user.role === 'admin') {
-    const roleMap = { chairman: '/admin', treasurer: '/admin', secretary: '/admin/minutes', welfare: '/admin/welfare' };
-    return res.redirect(roleMap[user.admin_role] || '/admin');
+    if (user.admin_role === 'secretary' || user.admin_role === 'welfare') {
+      return res.redirect('/member');
+    }
+    return res.redirect('/admin');
   }
   res.redirect('/member');
 });
