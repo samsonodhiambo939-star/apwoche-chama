@@ -181,7 +181,12 @@ router.post('/members/reset-password/:id', async (req, res) => {
 });
 
 router.get('/cycles', async (req, res) => {
-  const cycles = await db.prepare('SELECT * FROM cycles ORDER BY start_date DESC').all();
+  const cycles = await db.prepare(`
+    SELECT c.*, 
+      (SELECT COUNT(*) FROM contributions WHERE cycle_id = c.id) as contrib_count,
+      (SELECT COALESCE(SUM(amount),0) FROM contributions WHERE cycle_id = c.id) as contrib_total
+    FROM cycles c ORDER BY c.start_date DESC
+  `).all();
   const currentCycle = await db.prepare('SELECT * FROM cycles WHERE is_open = 1 AND is_processed = 0 ORDER BY start_date DESC LIMIT 1').get();
   res.renderWithLayout('admin/cycles', { cycles, currentCycle });
 });
