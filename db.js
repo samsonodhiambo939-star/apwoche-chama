@@ -1,8 +1,13 @@
 const path = require('path');
 
+// Railway fallback: if DATABASE_URL env var isn't set but we're on Railway, use direct PG config
+if (!process.env.DATABASE_URL && process.env.RAILWAY_SERVICE_ID) {
+  process.env.DATABASE_URL = 'postgresql://postgres:rMbTWsolbqoswuTvhpcCbifSpUGVTaQA@postgres.railway.internal:5432/railway';
+}
+
 let db;
 
-console.log('DB mode:', process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'); if (process.env.DATABASE_URL) {
+if (process.env.DATABASE_URL) {
   // PostgreSQL (production)
   const { Pool } = require('pg');
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
