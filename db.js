@@ -2,7 +2,7 @@ const path = require('path');
 
 let db;
 
-if (process.env.DATABASE_URL) {
+console.log('DB mode:', process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'); if (process.env.DATABASE_URL) {
   // PostgreSQL (production)
   const { Pool } = require('pg');
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
