@@ -72,6 +72,9 @@ async function initDatabase() {
     `);
     try { db.prepare("ALTER TABLE users ADD COLUMN admin_role TEXT CHECK(admin_role IN ('chairman', 'treasurer', 'secretary', 'welfare'))").run(); } catch(e) {}
     try { db.prepare("ALTER TABLE contributions ADD COLUMN status TEXT DEFAULT 'pending'").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE members ADD COLUMN photo TEXT").run(); } catch(e) {}
+  } else {
+    try { await db.prepare("ALTER TABLE members ADD COLUMN photo TEXT").run(); } catch(e) {}
   }
 
   const fundCount = isPg ? await db.prepare('SELECT COUNT(*) as count FROM fund_types').get() : db.prepare('SELECT COUNT(*) as count FROM fund_types').get();

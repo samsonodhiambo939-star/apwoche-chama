@@ -180,6 +180,19 @@ router.post('/members/reset-password/:id', async (req, res) => {
   res.redirect('/admin/members');
 });
 
+router.post('/members/photo/:id', async (req, res) => {
+  const { photo } = req.body;
+  if (!photo) return res.redirect('/admin/members');
+  await db.prepare('UPDATE members SET photo = ? WHERE id = ?').run(photo, req.params.id);
+  auditLog(req.session.user, 'upload_photo', 'member', req.params.id, 'Photo uploaded');
+  res.redirect('/admin/members');
+});
+
+router.post('/members/photo/remove/:id', async (req, res) => {
+  await db.prepare('UPDATE members SET photo = NULL WHERE id = ?').run(req.params.id);
+  res.redirect('/admin/members');
+});
+
 router.get('/cycles', async (req, res) => {
   const cycles = await db.prepare(`
     SELECT c.*, 

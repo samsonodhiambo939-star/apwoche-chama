@@ -1,6 +1,15 @@
 <% header('My Dashboard'); %>
-<div class="page-title">My Dashboard</div>
-<p class="page-subtitle">Welcome, <%= user.memberName %> — your complete financial overview</p>
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:24px;">
+  <% if (memberPhoto) { %>
+    <img src="<%= memberPhoto %>" alt="photo" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid var(--border);">
+  <% } else { %>
+    <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#fff;"><%= user.memberName.charAt(0) %></div>
+  <% } %>
+  <div>
+    <div class="page-title" style="margin-bottom:4px;">Welcome, <%= user.memberName %></div>
+    <p class="text-muted text-sm"><%= user.memberNumber %> — your complete financial overview</p>
+  </div>
+</div>
 
 <!-- Reminders -->
 <div class="reminder-bar">

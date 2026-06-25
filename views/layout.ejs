@@ -321,9 +321,9 @@
       </button>
       <button class="icon-btn" onclick="toggleDark()" title="Toggle dark mode">🌙</button>
       <button id="installBtn" class="btn btn-sm btn-outline" style="display:none;color:#4ade80;border-color:#4ade80;font-size:11px;padding:4px 8px;">+ Install</button>
-      <a href="/profile" class="user-badge" title="Profile">
-        <span class="avatar"><%= user.memberName.charAt(0) %></span>
-        <span class="text-sm" style="display:flex;align-items:center;gap:4px;"><%= user.memberName %><span class="role-badge" style="font-size:9px;"><%= user.role === 'admin' ? (user.admin_role ? user.admin_role.charAt(0).toUpperCase() + user.admin_role.slice(1) : 'Admin') : 'Member' %></span></span>
+      <a href="/profile" class="user-badge" title="Profile" id="userBadge" style="gap:0;">
+        <span class="avatar" id="userAvatar" style="background-size:cover;background-position:center;background-repeat:no-repeat;"><%= user.memberName.charAt(0) %></span>
+        <span class="text-sm" style="display:flex;align-items:center;gap:4px;padding-left:4px;"><%= user.memberName %><span class="role-badge" style="font-size:9px;"><%= user.role === 'admin' ? (user.admin_role ? user.admin_role.charAt(0).toUpperCase() + user.admin_role.slice(1) : 'Admin') : 'Member' %></span></span>
       </a>
       <a href="/logout" style="color:#f87171;font-size:12px;margin-left:2px;">Logout</a>
     </div>
@@ -390,6 +390,19 @@
         else fetchNotifs();
       });
     }
+
+    // Load member photo for navbar
+    function loadMemberPhoto() {
+      fetch('/api/member/photo').then(function(r) { return r.json(); }).then(function(data) {
+        if (data.photo) {
+          var avatar = document.getElementById('userAvatar');
+          avatar.style.backgroundImage = 'url(' + data.photo + ')';
+          avatar.textContent = '';
+          avatar.style.backgroundSize = 'cover';
+        }
+      }).catch(function(){});
+    }
+    loadMemberPhoto();
 
     fetchNotifs();
     setInterval(fetchNotifs, 30000);

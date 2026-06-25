@@ -1,0 +1,11 @@
+  → A browser is available on this machine — `railway login` without --browserless opens it directly and completes more reliably.
+
+  → Sign in with one click:
+    https://railway.com/activate?user_code=GNSW-SPXR
+
+  → Or go to https://railway.com/activate and enter this code:
+    GNSW-SPXR
+
+Device code expired. Please run `railway login` again.
+
+C:\Users\aaaaa\Desktop>

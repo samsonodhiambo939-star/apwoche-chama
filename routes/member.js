@@ -46,7 +46,9 @@ router.get('/', async (req, res) => {
   const pendingCardPayments = (await db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM payment_requests WHERE member_id = ? AND payment_type = 'member_card' AND status = 'pending'").get(memberId)).t;
   const pendingLoanPayments = (await db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM payment_requests WHERE member_id = ? AND payment_type = 'loan' AND status = 'pending'").get(memberId)).t;
 
-  res.renderWithLayout('member/dashboard', { balances, totalSavingsDev, activeLoan, recentContributions, currentCycle, hasContributed, pendingContribs, pendingLoan, totalFines, cardBalance, pendingFinePayments, pendingCardPayments, pendingLoanPayments });
+  const member = await db.prepare('SELECT photo FROM members WHERE id = ?').get(memberId);
+
+  res.renderWithLayout('member/dashboard', { balances, totalSavingsDev, activeLoan, recentContributions, currentCycle, hasContributed, pendingContribs, pendingLoan, totalFines, cardBalance, pendingFinePayments, pendingCardPayments, pendingLoanPayments, memberPhoto: member?.photo || null });
 });
 
 router.get('/contribute', async (req, res) => {

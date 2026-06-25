@@ -443,6 +443,12 @@ app.post('/api/notifications/read/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/member/photo', async (req, res) => {
+  if (!req.session.user || !req.session.user.memberId) return res.json({ photo: null });
+  const member = await db.prepare('SELECT photo FROM members WHERE id = ?').get(req.session.user.memberId);
+  res.json({ photo: member?.photo || null });
+});
+
 // --- Audit log helper ---
 async function auditLog(user, action, entityType, entityId, details) {
   try { await db.prepare("INSERT INTO audit_logs (user_id, username, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?, ?)").run(user.id, user.username, action, entityType, entityId || null, details || null); } catch(e) {}
