@@ -1,12 +1,11 @@
 {
   "build": {
-    "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile"
+    "builder": "NIXPACKS"
   },
   "deploy": {
     "startCommand": "node server.js",
     "healthcheckPath": "/login",
-    "healthcheckTimeout": 300, // triggering redeploy
+    "healthcheckTimeout": 300,
     "restartPolicyType": "always"
   }
 }
