@@ -6,6 +6,13 @@
   <input id="searchInput" placeholder="Search member..." style="flex:1;min-width:200px;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--input-bg);color:var(--text);">
 </div>
 
+<% if (error) { %>
+  <div class="alert alert-error">
+    <span class="alert-icon">⛔</span>
+    <span><%= error === 'blocked' ? 'You cannot approve or reject this entry. You created it, or it requires a different official to review it.' : error %></span>
+  </div>
+<% } %>
+
 <% if (pendingContributions.length === 0 && pendingLoans.length === 0 && pendingPayments.length === 0) { %>
   <div class="alert alert-success">
     <span class="alert-icon">✅</span>
@@ -19,9 +26,11 @@
       <h2>Cycle Contributions</h2>
       <div style="display:flex;gap:8px;align-items:center;">
         <span class="badge badge-pending"><%= pendingContributions.length %> pending</span>
-        <form method="POST" action="/admin/contributions/approve-all" style="display:inline;" onsubmit="return confirm('Approve all <%= pendingContributions.length %> pending contributions?')">
+        <% if (pendingContributions.filter(c => checkApprovalRight(user, c)).length > 0) { %>
+        <form method="POST" action="/admin/contributions/approve-all" style="display:inline;" onsubmit="return confirm('Approve all <%= pendingContributions.filter(c => checkApprovalRight(user, c)).length %> pending contributions?')">
           <button class="btn btn-success btn-sm">Approve All</button>
         </form>
+        <% } %>
       </div>
     <div class="table-wrap">
       <table>
@@ -34,12 +43,16 @@
             <td class="text-sm"><%= c.start_date %> — <%= c.end_date %></td>
             <td class="text-sm"><%= new Date(c.created_at).toLocaleDateString() %></td>
             <td style="white-space:nowrap;">
+              <% if (checkApprovalRight(user, c)) { %>
               <form method="POST" action="/admin/contributions/approve/<%= c.id %>" style="display:inline;">
                 <button class="btn btn-success btn-sm">Approve</button>
               </form>
               <form method="POST" action="/admin/contributions/reject/<%= c.id %>" style="display:inline;" onsubmit="event.preventDefault();confirmAction('Reject this contribution?',function(){this.submit()}.bind(this))">
                 <button class="btn btn-danger btn-sm">Reject</button>
               </form>
+              <% } else { %>
+              <span class="badge badge-muted">Requires other official</span>
+              <% } %>
             </td>
           </tr>
         <% }) %>
@@ -64,12 +77,16 @@
             <td style="text-align:right;font-weight:700;color:#ef4444;">KES <%= Number(l.amount * 1.1).toLocaleString() %></td>
             <td class="text-sm"><%= new Date(l.created_at).toLocaleDateString() %></td>
             <td style="white-space:nowrap;">
+              <% if (checkApprovalRight(user, l)) { %>
               <form method="POST" action="/admin/loans/approve/<%= l.id %>" style="display:inline;">
                 <button class="btn btn-success btn-sm">✅ Approve (10% auto-applied)</button>
               </form>
               <form method="POST" action="/admin/loans/reject/<%= l.id %>" style="display:inline;" onsubmit="event.preventDefault();confirmAction('Reject this loan application?',function(){this.submit()}.bind(this))">
                 <button class="btn btn-danger btn-sm">Reject</button>
               </form>
+              <% } else { %>
+              <span class="badge badge-muted">Requires other official</span>
+              <% } %>
             </td>
           </tr>
         <% }) %>
@@ -84,9 +101,11 @@
       <h2>Repayments</h2>
       <div style="display:flex;gap:8px;align-items:center;">
         <span class="badge badge-pending"><%= pendingPayments.length %> pending</span>
-        <form method="POST" action="/admin/payments/approve-all" style="display:inline;" onsubmit="return confirm('Approve all <%= pendingPayments.length %> pending payments?')">
+        <% if (pendingPayments.filter(r => checkApprovalRight(user, r)).length > 0) { %>
+        <form method="POST" action="/admin/payments/approve-all" style="display:inline;" onsubmit="return confirm('Approve all <%= pendingPayments.filter(r => checkApprovalRight(user, r)).length %> pending payments?')">
           <button class="btn btn-success btn-sm">Approve All</button>
         </form>
+        <% } %>
       </div>
     <div class="table-wrap">
       <table>
@@ -99,12 +118,16 @@
             <td style="text-align:right;font-weight:700;">KES <%= Number(r.amount).toLocaleString() %></td>
             <td class="text-sm"><%= new Date(r.created_at).toLocaleDateString() %></td>
             <td style="white-space:nowrap;">
+              <% if (checkApprovalRight(user, r)) { %>
               <form method="POST" action="/admin/payments/approve/<%= r.id %>" style="display:inline;">
                 <button class="btn btn-success btn-sm">Approve</button>
               </form>
               <form method="POST" action="/admin/payments/reject/<%= r.id %>" style="display:inline;" onsubmit="event.preventDefault();confirmAction('Reject this payment?',function(){this.submit()}.bind(this))">
                 <button class="btn btn-danger btn-sm">Reject</button>
               </form>
+              <% } else { %>
+              <span class="badge badge-muted">Requires other official</span>
+              <% } %>
             </td>
           </tr>
         <% }) %>

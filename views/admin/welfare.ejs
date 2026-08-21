@@ -3,6 +3,7 @@
 <p class="page-subtitle">Review and approve member welfare support requests (Welfare Officer)</p>
 
 <% if (error === 'insufficient') { %><div class="alert alert-error"><span class="alert-icon">❌</span>Insufficient welfare fund balance to approve this request.</div><% } %>
+<% if (error === 'blocked') { %><div class="alert alert-error"><span class="alert-icon">⛔</span>You cannot approve or reject this entry. You created it, or it requires a different official to review it.</div><% } %>
 
 <div class="card">
   <div class="card-header"><h2>Pending Welfare Requests</h2></div>
@@ -22,12 +23,16 @@
             <td><%= r.relationship %></td>
             <td class="text-sm"><%= new Date(r.created_at).toLocaleDateString() %></td>
             <td style="white-space:nowrap;">
+              <% if (checkApprovalRight(user, r)) { %>
               <form method="POST" action="/admin/welfare/approve/<%= r.id %>" style="display:inline;">
                 <button class="btn btn-success btn-sm">Approve</button>
               </form>
               <form method="POST" action="/admin/welfare/reject/<%= r.id %>" style="display:inline;" onsubmit="event.preventDefault();confirmAction('Reject this welfare request?',function(){this.submit()}.bind(this))">
                 <button class="btn btn-danger btn-sm">Reject</button>
               </form>
+              <% } else { %>
+              <span class="badge badge-muted">Requires other official</span>
+              <% } %>
             </td>
           </tr>
         <% }) %>

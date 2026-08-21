@@ -40,6 +40,19 @@ global.sanitize = (v) => (v === null || v === undefined ? '' : String(v).trim())
 global.toNumber = (v, def = 0) => { const n = parseFloat(v); return isNaN(n) ? def : Math.max(0, n); };
 global.escapeHtml = (v) => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
+// --- Cross-approval rule: officials cannot approve their own entries ---
+// treasurer-entered -> only chairman; chairman-entered -> only treasurer;
+// member/admin-created -> any official; legacy records (no created_by) -> any official.
+global.checkApprovalRight = (user, record) => {
+  if (!user || user.role !== 'admin') return false;
+  const role = user.admin_role;
+  if (!record || !record.created_by) return true;
+  if (record.created_by === user.id) return false;
+  if (record.created_by_role === 'treasurer') return role === 'chairman';
+  if (record.created_by_role === 'chairman') return role === 'treasurer';
+  return true;
+};
+
 // --- Rate limiting (login) ---
 const loginAttempts = {};
 app.use('/login', (req, res, next) => {
@@ -82,7 +95,7 @@ app.use('/', authRoutes);
 // --- Bulk approve (must be before admin router to avoid /:id catch-all) ---
 app.post('/admin/contributions/approve-all', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/');
-  const pending = await db.prepare("SELECT * FROM contributions WHERE status = 'pending' AND amount > 0").all();
+  const pending = (await db.prepare("SELECT * FROM contributions WHERE status = 'pending' AND amount > 0").all()).filter(c => checkApprovalRight(req.session.user, c));
   const trans = await db.transaction(async () => {
     for (const c of pending) {
       await db.prepare("UPDATE contributions SET status = 'approved' WHERE id = ?").run(c.id);
@@ -97,7 +110,7 @@ app.post('/admin/contributions/approve-all', async (req, res) => {
 
 app.post('/admin/payments/approve-all', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/');
-  const pending = await db.prepare("SELECT * FROM payment_requests WHERE status = 'pending'").all();
+  const pending = (await db.prepare("SELECT * FROM payment_requests WHERE status = 'pending'").all()).filter(r => checkApprovalRight(req.session.user, r));
   const trans = await db.transaction(async () => {
     for (const r of pending) {
       const now = new Date().toISOString();
@@ -150,7 +163,7 @@ app.post('/member/welfare', async (req, res) => {
     const pendingAmt = await db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM welfare_requests WHERE member_id = ? AND status = 'pending'").get(memberId);
     return res.renderWithLayout('member/welfare', { user: req.session.user, balance: welfareBalance.b, requests, pendingAmt: pendingAmt.t, error: 'All fields required', message: null, pageTitle: 'Welfare Request', success: null });
   }
-  await db.prepare("INSERT INTO welfare_requests (member_id, amount, reason, beneficiary_name, beneficiary_id_number, relationship, description) VALUES (?, ?, ?, ?, ?, ?, ?)").run(memberId, amount, reason, beneficiary_name, beneficiary_id_number, relationship, description || null);
+  await db.prepare("INSERT INTO welfare_requests (member_id, amount, reason, beneficiary_name, beneficiary_id_number, relationship, description, created_by, created_by_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(memberId, amount, reason, beneficiary_name, beneficiary_id_number, relationship, description || null, req.session.user.id, req.session.user.admin_role || 'member');
   await notify(null, 'Welfare Request', req.session.user.memberName + ' requested KES ' + Number(amount).toLocaleString() + ' welfare: ' + reason, 'warning', '/admin/welfare');
   auditLog(req.session.user, 'create', 'welfare_request', null, 'KES ' + amount + ' welfare for ' + beneficiary_name);
   res.redirect('/member/welfare?success=1');
@@ -166,6 +179,7 @@ app.post('/admin/welfare/approve/:id', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/login');
   const wr = await db.prepare("SELECT * FROM welfare_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
   if (!wr) return res.redirect('/admin/welfare');
+  if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/welfare?error=blocked');
   const welfareFund = await db.prepare("SELECT COALESCE(SUM(balance),0) as t FROM member_balances WHERE fund_type_id = 1").get();
   if (welfareFund.t < wr.amount) return res.redirect('/admin/welfare?error=insufficient');
   await db.transaction(async function() {
@@ -180,9 +194,11 @@ app.post('/admin/welfare/approve/:id', async (req, res) => {
 app.post('/admin/welfare/reject/:id', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/login');
   const wr = await db.prepare("SELECT * FROM welfare_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (wr) { await db.prepare("UPDATE welfare_requests SET status = 'rejected', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(req.session.user.id, wr.id);
-    await notify(wr.member_id, 'Welfare Rejected', 'KES ' + wr.amount.toLocaleString() + ' welfare rejected', 'error', '/member/welfare');
-    auditLog(req.session.user, 'reject', 'welfare_request', wr.id, 'KES ' + wr.amount); }
+  if (!wr) return res.redirect('/admin/welfare');
+  if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/welfare?error=blocked');
+  await db.prepare("UPDATE welfare_requests SET status = 'rejected', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(req.session.user.id, wr.id);
+  await notify(wr.member_id, 'Welfare Rejected', 'KES ' + wr.amount.toLocaleString() + ' welfare rejected', 'error', '/member/welfare');
+  auditLog(req.session.user, 'reject', 'welfare_request', wr.id, 'KES ' + wr.amount);
   res.redirect('/admin/welfare');
 });
 
@@ -378,7 +394,7 @@ app.post('/withdraw', async (req, res) => {
   if (!fund_type_id || amount <= 0) return res.redirect('/withdraw');
   const bal = await db.prepare("SELECT COALESCE(balance,0) as b FROM member_balances WHERE member_id = ? AND fund_type_id = ?").get(memberId, fund_type_id);
   if (!bal || bal.b < amount) return res.redirect('/withdraw');
-  await db.prepare("INSERT INTO withdrawal_requests (member_id, fund_type_id, amount) VALUES (?, ?, ?)").run(memberId, fund_type_id, amount);
+  await db.prepare("INSERT INTO withdrawal_requests (member_id, fund_type_id, amount, created_by, created_by_role) VALUES (?, ?, ?, ?, ?)").run(memberId, fund_type_id, amount, req.session.user.id, req.session.user.admin_role || 'member');
   await db.prepare("INSERT INTO notifications (member_id, title, message, type, link) VALUES (?, 'Withdrawal Request', ?, 'warning', '/admin/approvals')").run(null, `${req.session.user.memberName} requested KES ${amount.toLocaleString()} withdrawal`);
   auditLog(req.session.user, 'create', 'withdrawal_request', null, `KES ${amount} withdrawal requested from fund ${fund_type_id}`);
   res.redirect('/withdraw');

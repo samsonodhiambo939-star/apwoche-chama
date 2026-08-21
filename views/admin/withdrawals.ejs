@@ -2,6 +2,10 @@
 <div class="page-title">Withdrawal Requests</div>
 <p class="page-subtitle">Approve or reject member withdrawal requests</p>
 
+<% if (error) { %>
+  <div class="alert alert-error"><span class="alert-icon">⛔</span><span><%= error === 'blocked' ? 'You cannot approve or reject this entry. You created it, or it requires a different official to review it.' : error %></span></div>
+<% } %>
+
 <div class="card">
   <% if (requests.length === 0) { %>
     <div class="empty-state"><div class="empty-icon">✅</div><div class="empty-text">No pending withdrawal requests.</div></div>
@@ -18,8 +22,10 @@
             <td><span class="badge badge-<%= r.status %>"><%= r.status %></span></td>
             <td style="white-space:nowrap;">
               <% if (r.status === 'pending') { %>
+                <% if (checkApprovalRight(user, r)) { %>
                 <form method="POST" action="/admin/withdrawals/approve/<%= r.id %>" style="display:inline;"><button class="btn btn-success btn-sm">Approve</button></form>
                 <form method="POST" action="/admin/withdrawals/reject/<%= r.id %>" style="display:inline;"><button class="btn btn-danger btn-sm">Reject</button></form>
+                <% } else { %><span class="badge badge-muted">Requires other official</span><% } %>
               <% } else { %><span class="text-xs text-muted">—</span><% } %>
             </td>
           </tr>
