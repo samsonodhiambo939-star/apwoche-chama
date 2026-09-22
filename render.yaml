@@ -1,0 +1,19 @@
+# Render deploy config for apwoche-chama (production codebase).
+# Manual setup (no card needed): dashboard → New → Web Service → this repo,
+# branch main, build `npm install`, start `node server.js`, plan Free,
+# then add DATABASE_URL / SESSION_SECRET / NODE_ENV=production in Environment.
+services:
+  - type: web
+    name: apwoche-chama
+    runtime: node
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /login
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
