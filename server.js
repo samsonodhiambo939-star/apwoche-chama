@@ -47,7 +47,7 @@ global.checkApprovalRight = (user, record) => {
   if (!user || user.role !== 'admin') return false;
   const role = user.admin_role;
   if (!record || !record.created_by) return true;
-  if (record.created_by === user.id) return false;
+  if (Number(record.created_by) === Number(user.id)) return false;
   if (record.created_by_role === 'treasurer') return role === 'chairman';
   if (record.created_by_role === 'chairman') return role === 'treasurer';
   return true;
@@ -95,52 +95,72 @@ app.use('/', authRoutes);
 // --- Bulk approve (must be before admin router to avoid /:id catch-all) ---
 app.post('/admin/contributions/approve-all', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/');
-  const pending = (await db.prepare("SELECT * FROM contributions WHERE status = 'pending' AND amount > 0").all()).filter(c => checkApprovalRight(req.session.user, c));
-  const trans = await db.transaction(async () => {
-    for (const c of pending) {
-      await db.prepare("UPDATE contributions SET status = 'approved' WHERE id = ?").run(c.id);
-      await db.prepare("INSERT INTO member_balances (member_id, fund_type_id, balance) VALUES (?, ?, ?) ON CONFLICT(member_id, fund_type_id) DO UPDATE SET balance = balance + ?").run(c.member_id, c.fund_type_id, c.amount, c.amount);
-      await notify(c.member_id, 'Contribution Approved', 'KES ' + c.amount.toLocaleString() + ' contribution approved', 'success', '/member');
-    }
-  });
-  await trans();
-  auditLog(req.session.user, 'bulk_approve', 'contribution', null, 'Approved ' + pending.length + ' contributions');
-  res.redirect('/admin/approvals');
+  try {
+    const pending = (await db.prepare("SELECT * FROM contributions WHERE status = 'pending' AND amount > 0").all()).filter(c => checkApprovalRight(req.session.user, c));
+    const trans = db.transaction(async () => {
+      for (const c of pending) {
+        await db.prepare("UPDATE contributions SET status = 'approved' WHERE id = ?").run(c.id);
+        const upd = await db.prepare("UPDATE member_balances SET balance = balance + ? WHERE member_id = ? AND fund_type_id = ?").run(c.amount, c.member_id, c.fund_type_id);
+        if (upd.changes === 0) {
+          await db.prepare("INSERT INTO member_balances (member_id, fund_type_id, balance) VALUES (?, ?, ?)").run(c.member_id, c.fund_type_id, c.amount);
+        }
+        await notify(c.member_id, 'Contribution Approved', 'KES ' + Number(c.amount).toLocaleString() + ' contribution approved', 'success', '/member');
+      }
+    });
+    await trans();
+    auditLog(req.session.user, 'bulk_approve', 'contribution', null, 'Approved ' + pending.length + ' contributions');
+    res.redirect('/admin/approvals');
+  } catch (e) {
+    console.error('BULK APPROVE CONTRIBUTIONS ERROR:', e.message, e.stack);
+    res.redirect('/admin/approvals?error=' + encodeURIComponent('Bulk approve failed: ' + e.message));
+  }
 });
 
 app.post('/admin/payments/approve-all', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/');
-  const pending = (await db.prepare("SELECT * FROM payment_requests WHERE status = 'pending'").all()).filter(r => checkApprovalRight(req.session.user, r));
-  const trans = await db.transaction(async () => {
-    for (const r of pending) {
-      const now = new Date().toISOString();
-      await db.prepare("UPDATE payment_requests SET status = 'approved', approved_at = ? WHERE id = ?").run(now, r.id);
-      if (r.payment_type === 'fine') {
-        const pendingFines = await db.prepare("SELECT * FROM fines WHERE member_id = ? AND status = 'pending' ORDER BY created_at ASC").all(r.member_id);
-        let remaining = r.amount;
-        for (const fine of pendingFines) {
-          if (remaining <= 0) break;
-          const pay = Math.min(remaining, fine.balance);
-          const nb = fine.balance - pay;
-          await db.prepare(nb <= 0 ? "UPDATE fines SET balance = 0, status = 'paid' WHERE id = ?" : "UPDATE fines SET balance = ? WHERE id = ?").run(nb <= 0 ? fine.id : nb, nb <= 0 ? undefined : fine.id);
-          remaining -= pay;
+  try {
+    const pending = (await db.prepare("SELECT * FROM payment_requests WHERE status = 'pending'").all()).filter(r => checkApprovalRight(req.session.user, r));
+    const trans = db.transaction(async () => {
+      for (const r of pending) {
+        const now = new Date().toISOString();
+        await db.prepare("UPDATE payment_requests SET status = 'approved', approved_at = ? WHERE id = ?").run(now, r.id);
+        if (r.payment_type === 'fine') {
+          const pendingFines = await db.prepare("SELECT * FROM fines WHERE member_id = ? AND status = 'pending' ORDER BY created_at ASC").all(r.member_id);
+          let remaining = Number(r.amount);
+          for (const fine of pendingFines) {
+            if (remaining <= 0) break;
+            const pay = Math.min(remaining, Number(fine.balance));
+            const nb = Number(fine.balance) - pay;
+            if (nb <= 0) {
+              await db.prepare("UPDATE fines SET balance = 0, status = 'paid' WHERE id = ?").run(fine.id);
+            } else {
+              await db.prepare("UPDATE fines SET balance = ? WHERE id = ?").run(nb, fine.id);
+            }
+            remaining -= pay;
+          }
+        } else if (r.payment_type === 'member_card') {
+          await db.prepare("UPDATE member_cards SET paid_amount = paid_amount + ? WHERE member_id = ?").run(r.amount, r.member_id);
+        } else if (r.payment_type === 'loan') {
+          const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status IN ('active', 'defaulted')").get(r.reference_id);
+          if (loan) {
+            const np = Math.min(Number(loan.paid_amount) + Number(r.amount), Number(loan.amount_due));
+            if (np >= Number(loan.amount_due)) {
+              await db.prepare("UPDATE loans SET paid_amount = ?, status = 'paid' WHERE id = ?").run(np, loan.id);
+            } else {
+              await db.prepare("UPDATE loans SET paid_amount = ? WHERE id = ?").run(np, loan.id);
+            }
+          }
         }
-      } else if (r.payment_type === 'member_card') {
-        await db.prepare("UPDATE member_cards SET paid_amount = paid_amount + ? WHERE member_id = ?").run(r.amount, r.member_id);
-      } else if (r.payment_type === 'loan') {
-        const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status = 'active'").get(r.reference_id);
-        if (loan) {
-          const np = loan.paid_amount + r.amount;
-          const nd = loan.amount_due - r.amount;
-          await db.prepare(nd <= 0 ? "UPDATE loans SET paid_amount = ?, amount_due = 0, status = 'paid' WHERE id = ?" : "UPDATE loans SET paid_amount = ?, amount_due = ? WHERE id = ?").run(np, nd <= 0 ? loan.id : loan.id, nd <= 0 ? undefined : nd);
-        }
+        await notify(r.member_id, 'Payment Approved', 'KES ' + Number(r.amount).toLocaleString() + ' payment approved', 'success', '/member');
       }
-      await notify(r.member_id, 'Payment Approved', 'KES ' + r.amount.toLocaleString() + ' payment approved', 'success', '/member');
-    }
-  });
-  await trans();
-  auditLog(req.session.user, 'bulk_approve', 'payment', null, 'Approved ' + pending.length + ' payment requests');
-  res.redirect('/admin/payments');
+    });
+    await trans();
+    auditLog(req.session.user, 'bulk_approve', 'payment', null, 'Approved ' + pending.length + ' payment requests');
+    res.redirect('/admin/payments');
+  } catch (e) {
+    console.error('BULK APPROVE PAYMENTS ERROR:', e.message, e.stack);
+    res.redirect('/admin/payments?error=' + encodeURIComponent('Bulk approve failed: ' + e.message));
+  }
 });
 
 // --- Welfare requests (must be before admin router) ---
@@ -171,35 +191,50 @@ app.post('/member/welfare', async (req, res) => {
 
 app.get('/admin/welfare', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/login');
-  const requests = await db.prepare("SELECT wr.*, m.first_name, m.last_name, m.member_number FROM welfare_requests wr JOIN members m ON wr.member_id = m.id ORDER BY wr.created_at DESC").all();
-  res.renderWithLayout('admin/welfare', { user: req.session.user, requests, pageTitle: 'Welfare Requests', error: req.query.error || null });
+  try {
+    const requests = await db.prepare("SELECT wr.*, m.first_name, m.last_name, m.member_number FROM welfare_requests wr JOIN members m ON wr.member_id = m.id ORDER BY wr.created_at DESC").all();
+    res.renderWithLayout('admin/welfare', { user: req.session.user, requests, pageTitle: 'Welfare Requests', error: req.query.error || null });
+  } catch (e) {
+    console.error('LOAD WELFARE ERROR:', e.message, e.stack);
+    res.renderWithLayout('admin/welfare', { user: req.session.user, requests: [], pageTitle: 'Welfare Requests', error: 'Could not load welfare requests: ' + e.message });
+  }
 });
 
 app.post('/admin/welfare/approve/:id', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/login');
-  const wr = await db.prepare("SELECT * FROM welfare_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!wr) return res.redirect('/admin/welfare');
-  if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/welfare?error=blocked');
-  const welfareFund = await db.prepare("SELECT COALESCE(SUM(balance),0) as t FROM member_balances WHERE fund_type_id = 1").get();
-  if (welfareFund.t < wr.amount) return res.redirect('/admin/welfare?error=insufficient');
-  await db.transaction(async function() {
-    await db.prepare("UPDATE welfare_requests SET status = 'approved', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(req.session.user.id, wr.id);
-    await db.prepare("UPDATE member_balances SET balance = balance - ? WHERE member_id = ? AND fund_type_id = 1").run(wr.amount, wr.member_id);
-  })();
-  await notify(wr.member_id, 'Welfare Approved', 'KES ' + wr.amount.toLocaleString() + ' welfare approved', 'success', '/member/welfare');
-  auditLog(req.session.user, 'approve', 'welfare_request', wr.id, 'KES ' + wr.amount);
-  res.redirect('/admin/welfare');
+  try {
+    const wr = await db.prepare("SELECT * FROM welfare_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!wr) return res.redirect('/admin/welfare');
+    if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/welfare?error=' + encodeURIComponent('You are not allowed to approve this transaction.'));
+    const welfareFund = await db.prepare("SELECT COALESCE(SUM(balance),0) as t FROM member_balances WHERE fund_type_id = 1").get();
+    if (Number(welfareFund.t) < Number(wr.amount)) return res.redirect('/admin/welfare?error=insufficient');
+    await db.transaction(async function() {
+      await db.prepare("UPDATE welfare_requests SET status = 'approved', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(req.session.user.id, wr.id);
+      await db.prepare("UPDATE member_balances SET balance = balance - ? WHERE member_id = ? AND fund_type_id = 1").run(wr.amount, wr.member_id);
+    })();
+    await notify(wr.member_id, 'Welfare Approved', 'KES ' + Number(wr.amount).toLocaleString() + ' welfare approved', 'success', '/member/welfare');
+    auditLog(req.session.user, 'approve', 'welfare_request', wr.id, 'KES ' + wr.amount);
+    res.redirect('/admin/welfare');
+  } catch (e) {
+    console.error('APPROVE WELFARE ERROR:', e.message, e.stack);
+    res.redirect('/admin/welfare?error=' + encodeURIComponent('Could not approve: ' + e.message));
+  }
 });
 
 app.post('/admin/welfare/reject/:id', async (req, res) => {
   if (!req.session.user || req.session.user.role !== 'admin') return res.redirect('/login');
-  const wr = await db.prepare("SELECT * FROM welfare_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!wr) return res.redirect('/admin/welfare');
-  if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/welfare?error=blocked');
-  await db.prepare("UPDATE welfare_requests SET status = 'rejected', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(req.session.user.id, wr.id);
-  await notify(wr.member_id, 'Welfare Rejected', 'KES ' + wr.amount.toLocaleString() + ' welfare rejected', 'error', '/member/welfare');
-  auditLog(req.session.user, 'reject', 'welfare_request', wr.id, 'KES ' + wr.amount);
-  res.redirect('/admin/welfare');
+  try {
+    const wr = await db.prepare("SELECT * FROM welfare_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!wr) return res.redirect('/admin/welfare');
+    if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/welfare?error=' + encodeURIComponent('You are not allowed to reject this transaction.'));
+    await db.prepare("UPDATE welfare_requests SET status = 'rejected', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(req.session.user.id, wr.id);
+    await notify(wr.member_id, 'Welfare Rejected', 'KES ' + Number(wr.amount).toLocaleString() + ' welfare rejected', 'error', '/member/welfare');
+    auditLog(req.session.user, 'reject', 'welfare_request', wr.id, 'KES ' + wr.amount);
+    res.redirect('/admin/welfare');
+  } catch (e) {
+    console.error('REJECT WELFARE ERROR:', e.message, e.stack);
+    res.redirect('/admin/welfare?error=' + encodeURIComponent('Could not reject: ' + e.message));
+  }
 });
 
 // --- Welfare Registration (admin view) ---
@@ -489,7 +524,7 @@ app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message || err);
   if (req.headers.accept && req.headers.accept.includes('text/html')) {
     if (req.session && req.session.user) {
-      return res.status(500).render('error', { message: 'Something went wrong. Please try again.', user: req.session.user });
+      return res.status(500).render('error', { message: 'Something went wrong: ' + (err.message || 'unknown error'), user: req.session.user });
     }
     return res.status(500).send('Server error. Please try again.');
   }

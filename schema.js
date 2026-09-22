@@ -93,6 +93,14 @@ async function initDatabase() {
   await migrateCols('welfare_requests', ['created_by INTEGER', "created_by_role TEXT"]);
   await migrateCols('withdrawal_requests', ['created_by INTEGER', "created_by_role TEXT"]);
 
+  // Safety-net: one balance row per (member, fund). Required by balance upserts.
+  // Skipped automatically if the index already exists; logs and continues if
+  // duplicate rows exist (approval code no longer depends on this constraint).
+  try {
+    if (isPg) { await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS member_balances_member_fund ON member_balances(member_id, fund_type_id)").run(); }
+    else { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS member_balances_member_fund ON member_balances(member_id, fund_type_id)").run(); }
+  } catch (e) { console.error('Balance unique-index migration skipped:', e.message); }
+
   const fundCount = isPg ? await db.prepare('SELECT COUNT(*) as count FROM fund_types').get() : db.prepare('SELECT COUNT(*) as count FROM fund_types').get();
   if (fundCount.count === 0) {
     if (isPg) {

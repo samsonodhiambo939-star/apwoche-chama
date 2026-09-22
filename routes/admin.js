@@ -40,7 +40,8 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/approvals', async (req, res) => {
-  const pendingContributions = await db.prepare(`
+  try {
+    const pendingContributions = await db.prepare(`
     SELECT c.id, c.amount, c.created_at, c.created_by, c.created_by_role, f.name as fund, m.first_name, m.last_name, m.member_number, cy.start_date, cy.end_date
     FROM contributions c
     JOIN fund_types f ON c.fund_type_id = f.id
@@ -72,68 +73,90 @@ router.get('/approvals', async (req, res) => {
   `).all();
 
   res.renderWithLayout('admin/approvals', { pendingContributions, pendingLoans, pendingPayments, error: req.query.error || null });
+  } catch (e) {
+    console.error('LOAD APPROVALS ERROR:', e.message, e.stack);
+    res.renderWithLayout('admin/approvals', { pendingContributions: [], pendingLoans: [], pendingPayments: [], error: 'Could not load approvals: ' + e.message });
+  }
 });
 
 router.post('/contributions/approve/:id', async (req, res) => {
-  const contrib = await db.prepare("SELECT * FROM contributions WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!contrib) return res.redirect('/admin/approvals');
-  if (!checkApprovalRight(req.session.user, contrib)) return res.redirect('/admin/approvals?error=blocked');
-
-  await db.transaction(async () => {
-    await db.prepare("UPDATE contributions SET status = 'approved' WHERE id = ?").run(contrib.id);
-    await db.prepare(`
-      INSERT INTO member_balances (member_id, fund_type_id, balance)
-      VALUES (?, ?, ?)
-      ON CONFLICT(member_id, fund_type_id) DO UPDATE SET balance = balance + ?
-    `).run(contrib.member_id, contrib.fund_type_id, contrib.amount, contrib.amount);
-  })();
-  auditLog(req.session.user, 'approve', 'contribution', contrib.id, 'KES ' + contrib.amount + ' fund ' + contrib.fund_type_id);
-  await notify(contrib.member_id, 'Contribution Approved', 'KES ' + contrib.amount.toLocaleString() + ' contribution approved', 'success', '/member');
-
-  res.redirect('/admin/approvals');
+  try {
+    const contrib = await db.prepare("SELECT * FROM contributions WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!contrib) return res.redirect('/admin/approvals');
+    if (!checkApprovalRight(req.session.user, contrib)) return res.redirect('/admin/approvals?error=' + encodeURIComponent('You are not allowed to approve this transaction.'));
+    await db.transaction(async () => {
+      await db.prepare("UPDATE contributions SET status = 'approved' WHERE id = ?").run(contrib.id);
+      // Update-then-insert (works with or without a UNIQUE constraint on balances)
+      const upd = await db.prepare("UPDATE member_balances SET balance = balance + ? WHERE member_id = ? AND fund_type_id = ?").run(contrib.amount, contrib.member_id, contrib.fund_type_id);
+      if (upd.changes === 0) {
+        await db.prepare("INSERT INTO member_balances (member_id, fund_type_id, balance) VALUES (?, ?, ?)").run(contrib.member_id, contrib.fund_type_id, contrib.amount);
+      }
+    })();
+    auditLog(req.session.user, 'approve', 'contribution', contrib.id, 'KES ' + contrib.amount + ' fund ' + contrib.fund_type_id);
+    await notify(contrib.member_id, 'Contribution Approved', 'KES ' + Number(contrib.amount).toLocaleString() + ' contribution approved', 'success', '/member');
+    res.redirect('/admin/approvals');
+  } catch (e) {
+    console.error('APPROVE CONTRIB ERROR:', e.message, e.stack);
+    res.redirect('/admin/approvals?error=' + encodeURIComponent('Could not approve: ' + e.message));
+  }
 });
 
 router.post('/contributions/reject/:id', async (req, res) => {
-  const contrib = await db.prepare("SELECT * FROM contributions WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!contrib) return res.redirect('/admin/approvals');
-  if (!checkApprovalRight(req.session.user, contrib)) return res.redirect('/admin/approvals?error=blocked');
-  await db.prepare("UPDATE contributions SET status = 'rejected' WHERE id = ? AND status = 'pending'").run(req.params.id);
-  if (contrib) { await notify(contrib.member_id, 'Contribution Rejected', 'KES ' + contrib.amount.toLocaleString() + ' contribution was rejected', 'error', '/member/contribute');
-    auditLog(req.session.user, 'reject', 'contribution', contrib.id, 'KES ' + contrib.amount + ' rejected'); }
-  res.redirect('/admin/approvals');
+  try {
+    const contrib = await db.prepare("SELECT * FROM contributions WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!contrib) return res.redirect('/admin/approvals');
+    if (!checkApprovalRight(req.session.user, contrib)) return res.redirect('/admin/approvals?error=' + encodeURIComponent('You are not allowed to reject this transaction.'));
+    await db.prepare("UPDATE contributions SET status = 'rejected' WHERE id = ? AND status = 'pending'").run(req.params.id);
+    await notify(contrib.member_id, 'Contribution Rejected', 'KES ' + Number(contrib.amount).toLocaleString() + ' contribution was rejected', 'error', '/member/contribute');
+    auditLog(req.session.user, 'reject', 'contribution', contrib.id, 'KES ' + contrib.amount + ' rejected');
+    res.redirect('/admin/approvals');
+  } catch (e) {
+    console.error('REJECT CONTRIB ERROR:', e.message, e.stack);
+    res.redirect('/admin/approvals?error=' + encodeURIComponent('Could not reject: ' + e.message));
+  }
 });
 
 router.post('/loans/approve/:id', async (req, res) => {
-  const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!loan) return res.redirect('/admin/approvals');
-  if (!checkApprovalRight(req.session.user, loan)) return res.redirect('/admin/approvals?error=blocked');
+  try {
+    const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!loan) return res.redirect('/admin/approvals');
+    if (!checkApprovalRight(req.session.user, loan)) return res.redirect('/admin/approvals?error=' + encodeURIComponent('You are not allowed to approve this transaction.'));
 
-  const today = new Date().toISOString().split('T')[0];
-  const dueDate = new Date();
-  dueDate.setDate(dueDate.getDate() + 30);
-  const dueDateStr = dueDate.toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 30);
+    const dueDateStr = dueDate.toISOString().split('T')[0];
 
-  const amountDue = loan.amount + (loan.amount * loan.interest_rate / 100);
+    const amountDue = Number(loan.amount) + (Number(loan.amount) * Number(loan.interest_rate) / 100);
 
-  await db.prepare(`
-    UPDATE loans SET status = 'active', amount_due = ?, issued_date = ?, due_date = ?, approved_date = ?
-    WHERE id = ?
-  `).run(amountDue, today, dueDateStr, today, loan.id);
+    await db.prepare(`
+      UPDATE loans SET status = 'active', amount_due = ?, issued_date = ?, due_date = ?, approved_date = ?
+      WHERE id = ?
+    `).run(amountDue, today, dueDateStr, today, loan.id);
 
-  await notify(loan.member_id, 'Loan Approved', 'KES ' + loan.amount.toLocaleString() + ' loan approved at 10% interest. Due: ' + dueDateStr, 'success', '/member/loans');
-  auditLog(req.session.user, 'approve', 'loan', loan.id, 'KES ' + loan.amount + ' approved, due ' + dueDateStr);
+    await notify(loan.member_id, 'Loan Approved', 'KES ' + Number(loan.amount).toLocaleString() + ' loan approved at 10% interest. Due: ' + dueDateStr, 'success', '/member/loans');
+    auditLog(req.session.user, 'approve', 'loan', loan.id, 'KES ' + loan.amount + ' approved, due ' + dueDateStr);
 
-  res.redirect('/admin/approvals');
+    res.redirect('/admin/approvals');
+  } catch (e) {
+    console.error('APPROVE LOAN ERROR:', e.message, e.stack);
+    res.redirect('/admin/approvals?error=' + encodeURIComponent('Could not approve: ' + e.message));
+  }
 });
 
 router.post('/loans/reject/:id', async (req, res) => {
-  const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!loan) return res.redirect('/admin/approvals');
-  if (!checkApprovalRight(req.session.user, loan)) return res.redirect('/admin/approvals?error=blocked');
-  await db.prepare("UPDATE loans SET status = 'rejected' WHERE id = ? AND status = 'pending'").run(req.params.id);
-  if (loan) { await notify(loan.member_id, 'Loan Rejected', 'KES ' + loan.amount.toLocaleString() + ' loan application was rejected', 'error', '/member/loans');
-    auditLog(req.session.user, 'reject', 'loan', loan.id, 'KES ' + loan.amount + ' rejected'); }
-  res.redirect('/admin/approvals');
+  try {
+    const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!loan) return res.redirect('/admin/approvals');
+    if (!checkApprovalRight(req.session.user, loan)) return res.redirect('/admin/approvals?error=' + encodeURIComponent('You are not allowed to reject this transaction.'));
+    await db.prepare("UPDATE loans SET status = 'rejected' WHERE id = ? AND status = 'pending'").run(req.params.id);
+    await notify(loan.member_id, 'Loan Rejected', 'KES ' + Number(loan.amount).toLocaleString() + ' loan application was rejected', 'error', '/member/loans');
+    auditLog(req.session.user, 'reject', 'loan', loan.id, 'KES ' + loan.amount + ' rejected');
+    res.redirect('/admin/approvals');
+  } catch (e) {
+    console.error('REJECT LOAN ERROR:', e.message, e.stack);
+    res.redirect('/admin/approvals?error=' + encodeURIComponent('Could not reject: ' + e.message));
+  }
 });
 
 router.get('/members', async (req, res) => {
@@ -233,15 +256,26 @@ router.get('/loans', async (req, res) => {
 });
 
 router.post('/loans/process-overdue', async (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
-  const overdue = await db.prepare("SELECT * FROM loans WHERE status = 'active' AND due_date < ? AND date(due_date, '+30 days') <= ?").all(today, today);
-  const update = db.prepare("UPDATE loans SET amount_due = amount_due + (amount_due * interest_rate / 100), status = 'defaulted' WHERE id = ?");
-  await db.transaction(async () => {
-    for (const loan of overdue) {
-      await update.run(loan.id);
+  try {
+    const isPg = !!process.env.DATABASE_URL;
+    const today = new Date().toISOString().split('T')[0];
+    let overdue;
+    if (isPg) {
+      overdue = await db.prepare("SELECT * FROM loans WHERE status = 'active' AND due_date < $1 AND due_date <= $1::date - INTERVAL '30 days'").all(today);
+    } else {
+      overdue = await db.prepare("SELECT * FROM loans WHERE status = 'active' AND due_date < ? AND date(due_date, '+30 days') <= ?").all(today, today);
     }
-  })();
-  res.redirect('/admin/loans');
+    const update = db.prepare("UPDATE loans SET amount_due = amount_due + (amount_due * interest_rate / 100), status = 'defaulted' WHERE id = ?");
+    await db.transaction(async () => {
+      for (const loan of overdue) {
+        await update.run(loan.id);
+      }
+    })();
+    res.redirect('/admin/loans');
+  } catch (e) {
+    console.error('PROCESS OVERDUE ERROR:', e.message, e.stack);
+    res.redirect('/admin/loans');
+  }
 });
 
 router.get('/fines', async (req, res) => {
@@ -363,7 +397,8 @@ router.get('/members/:id/contributions', async (req, res) => {
 });
 
 router.get('/payments', async (req, res) => {
-  const requests = await db.prepare(`
+  try {
+    const requests = await db.prepare(`
     SELECT pr.*, m.first_name, m.last_name, m.member_number,
       CASE
         WHEN pr.payment_type = 'fine' THEN (SELECT reason FROM fines WHERE id = pr.reference_id)
@@ -374,110 +409,136 @@ router.get('/payments', async (req, res) => {
     JOIN members m ON pr.member_id = m.id
     ORDER BY pr.created_at DESC
   `).all();
-  res.renderWithLayout('admin/payments', { requests, error: req.query.error || null });
+    res.renderWithLayout('admin/payments', { requests, error: req.query.error || null });
+  } catch (e) {
+    console.error('LOAD PAYMENTS ERROR:', e.message, e.stack);
+    res.renderWithLayout('admin/payments', { requests: [], error: 'Could not load payments: ' + e.message });
+  }
 });
 
 router.post('/payments/approve/:id', async (req, res) => {
-  const reqData = await db.prepare("SELECT * FROM payment_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!reqData) return res.redirect('/admin/payments');
-  if (!checkApprovalRight(req.session.user, reqData)) return res.redirect('/admin/payments?error=blocked');
+  try {
+    const reqData = await db.prepare("SELECT * FROM payment_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!reqData) return res.redirect('/admin/payments');
+    if (!checkApprovalRight(req.session.user, reqData)) return res.redirect('/admin/payments?error=' + encodeURIComponent('You are not allowed to approve this transaction.'));
 
-  await db.transaction(async () => {
-    const now = new Date().toISOString();
-    await db.prepare("UPDATE payment_requests SET status = 'approved', approved_at = ? WHERE id = ?").run(now, reqData.id);
+    await db.transaction(async () => {
+      const now = new Date().toISOString();
+      await db.prepare("UPDATE payment_requests SET status = 'approved', approved_at = ? WHERE id = ?").run(now, reqData.id);
 
-    if (reqData.payment_type === 'fine') {
-      if (reqData.reference_id) {
-        const fine = await db.prepare("SELECT * FROM fines WHERE id = ? AND status = 'pending'").get(reqData.reference_id);
-        if (fine) {
-          const newBalance = fine.balance - reqData.amount;
-          if (newBalance <= 0) {
-            await db.prepare("UPDATE fines SET balance = 0, status = 'paid' WHERE id = ?").run(fine.id);
-          } else {
-            await db.prepare('UPDATE fines SET balance = ? WHERE id = ?').run(newBalance, fine.id);
+      if (reqData.payment_type === 'fine') {
+        if (reqData.reference_id) {
+          const fine = await db.prepare("SELECT * FROM fines WHERE id = ? AND status = 'pending'").get(reqData.reference_id);
+          if (fine) {
+            const newBalance = Number(fine.balance) - Number(reqData.amount);
+            if (newBalance <= 0) {
+              await db.prepare("UPDATE fines SET balance = 0, status = 'paid' WHERE id = ?").run(fine.id);
+            } else {
+              await db.prepare('UPDATE fines SET balance = ? WHERE id = ?').run(newBalance, fine.id);
+            }
           }
-        }
-      } else {
-        const pendingFines = await db.prepare("SELECT * FROM fines WHERE member_id = ? AND status = 'pending' ORDER BY created_at ASC").all(reqData.member_id);
-        let remaining = reqData.amount;
-        for (const fine of pendingFines) {
-          if (remaining <= 0) break;
-          const pay = Math.min(remaining, fine.balance);
-          const newBalance = fine.balance - pay;
-          if (newBalance <= 0) {
-            await db.prepare("UPDATE fines SET balance = 0, status = 'paid' WHERE id = ?").run(fine.id);
-          } else {
-            await db.prepare('UPDATE fines SET balance = ? WHERE id = ?').run(newBalance, fine.id);
-          }
-          remaining -= pay;
-        }
-      }
-    } else if (reqData.payment_type === 'member_card') {
-      await db.prepare('UPDATE member_cards SET paid_amount = paid_amount + ? WHERE member_id = ?').run(reqData.amount, reqData.member_id);
-    } else if (reqData.payment_type === 'loan') {
-      const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status = 'active'").get(reqData.reference_id);
-      if (loan) {
-        const newPaid = loan.paid_amount + reqData.amount;
-        const newDue = loan.amount_due - reqData.amount;
-        if (newDue <= 0) {
-          await db.prepare("UPDATE loans SET paid_amount = ?, amount_due = 0, status = 'paid' WHERE id = ?").run(newPaid, loan.id);
         } else {
-          await db.prepare('UPDATE loans SET paid_amount = ?, amount_due = ? WHERE id = ?').run(newPaid, newDue, loan.id);
+          const pendingFines = await db.prepare("SELECT * FROM fines WHERE member_id = ? AND status = 'pending' ORDER BY created_at ASC").all(reqData.member_id);
+          let remaining = Number(reqData.amount);
+          for (const fine of pendingFines) {
+            if (remaining <= 0) break;
+            const pay = Math.min(remaining, Number(fine.balance));
+            const newBalance = Number(fine.balance) - pay;
+            if (newBalance <= 0) {
+              await db.prepare("UPDATE fines SET balance = 0, status = 'paid' WHERE id = ?").run(fine.id);
+            } else {
+              await db.prepare('UPDATE fines SET balance = ? WHERE id = ?').run(newBalance, fine.id);
+            }
+            remaining -= pay;
+          }
+        }
+      } else if (reqData.payment_type === 'member_card') {
+        await db.prepare('UPDATE member_cards SET paid_amount = paid_amount + ? WHERE member_id = ?').run(reqData.amount, reqData.member_id);
+      } else if (reqData.payment_type === 'loan') {
+        const loan = await db.prepare("SELECT * FROM loans WHERE id = ? AND status IN ('active', 'defaulted')").get(reqData.reference_id);
+        if (loan) {
+          const newPaid = Math.min(Number(loan.paid_amount) + Number(reqData.amount), Number(loan.amount_due));
+          if (newPaid >= Number(loan.amount_due)) {
+            await db.prepare("UPDATE loans SET paid_amount = ?, status = 'paid' WHERE id = ?").run(newPaid, loan.id);
+          } else {
+            await db.prepare('UPDATE loans SET paid_amount = ? WHERE id = ?').run(newPaid, loan.id);
+          }
         }
       }
-    }
-  })();
-  const label = { fine: 'Fine', member_card: 'Card', loan: 'Loan' }[reqData.payment_type] || 'Payment';
-  auditLog(req.session.user, 'approve', 'payment_request', reqData.id, label + ' payment KES ' + reqData.amount);
-  await notify(reqData.member_id, label + ' Payment Approved', 'KES ' + reqData.amount.toLocaleString() + ' ' + label.toLowerCase() + ' payment approved', 'success', '/member');
-  res.redirect('/admin/payments');
+    })();
+    const label = { fine: 'Fine', member_card: 'Card', loan: 'Loan' }[reqData.payment_type] || 'Payment';
+    auditLog(req.session.user, 'approve', 'payment_request', reqData.id, label + ' payment KES ' + reqData.amount);
+    await notify(reqData.member_id, label + ' Payment Approved', 'KES ' + Number(reqData.amount).toLocaleString() + ' ' + label.toLowerCase() + ' payment approved', 'success', '/member');
+    res.redirect('/admin/payments');
+  } catch (e) {
+    console.error('APPROVE PAYMENT ERROR:', e.message, e.stack);
+    res.redirect('/admin/payments?error=' + encodeURIComponent('Could not approve: ' + e.message));
+  }
 });
 
 router.post('/payments/reject/:id', async (req, res) => {
-  const reqData = await db.prepare("SELECT * FROM payment_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!reqData) return res.redirect('/admin/payments');
-  if (!checkApprovalRight(req.session.user, reqData)) return res.redirect('/admin/payments?error=blocked');
-  await db.prepare("UPDATE payment_requests SET status = 'rejected' WHERE id = ? AND status = 'pending'").run(req.params.id);
-  if (reqData) {
+  try {
+    const reqData = await db.prepare("SELECT * FROM payment_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!reqData) return res.redirect('/admin/payments');
+    if (!checkApprovalRight(req.session.user, reqData)) return res.redirect('/admin/payments?error=' + encodeURIComponent('You are not allowed to reject this transaction.'));
+    await db.prepare("UPDATE payment_requests SET status = 'rejected' WHERE id = ? AND status = 'pending'").run(req.params.id);
     const label = { fine: 'Fine', member_card: 'Card', loan: 'Loan' }[reqData.payment_type] || 'Payment';
     auditLog(req.session.user, 'reject', 'payment_request', reqData.id, label + ' payment KES ' + reqData.amount + ' rejected');
-    await notify(reqData.member_id, label + ' Payment Rejected', 'KES ' + reqData.amount.toLocaleString() + ' ' + label.toLowerCase() + ' payment was rejected', 'error', '/member');
+    await notify(reqData.member_id, label + ' Payment Rejected', 'KES ' + Number(reqData.amount).toLocaleString() + ' ' + label.toLowerCase() + ' payment was rejected', 'error', '/member');
+    res.redirect('/admin/payments');
+  } catch (e) {
+    console.error('REJECT PAYMENT ERROR:', e.message, e.stack);
+    res.redirect('/admin/payments?error=' + encodeURIComponent('Could not reject: ' + e.message));
   }
-  res.redirect('/admin/payments');
 });
 
 router.get('/withdrawals', async (req, res) => {
-  const requests = await db.prepare(`
+  try {
+    const requests = await db.prepare(`
     SELECT wr.*, m.first_name, m.last_name, m.member_number, f.name as fund_name
     FROM withdrawal_requests wr
     JOIN members m ON wr.member_id = m.id
     JOIN fund_types f ON wr.fund_type_id = f.id
     ORDER BY wr.created_at DESC
   `).all();
-  res.renderWithLayout('admin/withdrawals', { requests, error: req.query.error || null });
+    res.renderWithLayout('admin/withdrawals', { requests, error: req.query.error || null });
+  } catch (e) {
+    console.error('LOAD WITHDRAWALS ERROR:', e.message, e.stack);
+    res.renderWithLayout('admin/withdrawals', { requests: [], error: 'Could not load withdrawals: ' + e.message });
+  }
 });
 
 router.post('/withdrawals/approve/:id', async (req, res) => {
-  const wr = await db.prepare("SELECT * FROM withdrawal_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!wr) return res.redirect('/admin/withdrawals');
-  if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/withdrawals?error=blocked');
-  await db.transaction(async () => {
-    await db.prepare("UPDATE withdrawal_requests SET status = 'approved', approved_at = datetime('now') WHERE id = ?").run(wr.id);
-    await db.prepare("UPDATE member_balances SET balance = balance - ? WHERE member_id = ? AND fund_type_id = ?").run(wr.amount, wr.member_id, wr.fund_type_id);
-  })();
-  auditLog(req.session.user, 'approve', 'withdrawal', wr.id, 'KES ' + wr.amount + ' from fund ' + wr.fund_type_id);
-  await notify(wr.member_id, 'Withdrawal Approved', 'KES ' + wr.amount.toLocaleString() + ' withdrawal approved', 'success', '/withdraw');
-  res.redirect('/admin/withdrawals');
+  try {
+    const wr = await db.prepare("SELECT * FROM withdrawal_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!wr) return res.redirect('/admin/withdrawals');
+    if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/withdrawals?error=' + encodeURIComponent('You are not allowed to approve this transaction.'));
+    await db.transaction(async () => {
+      await db.prepare("UPDATE withdrawal_requests SET status = 'approved', approved_at = datetime('now') WHERE id = ?").run(wr.id);
+      await db.prepare("UPDATE member_balances SET balance = balance - ? WHERE member_id = ? AND fund_type_id = ?").run(wr.amount, wr.member_id, wr.fund_type_id);
+    })();
+    auditLog(req.session.user, 'approve', 'withdrawal', wr.id, 'KES ' + wr.amount + ' from fund ' + wr.fund_type_id);
+    await notify(wr.member_id, 'Withdrawal Approved', 'KES ' + Number(wr.amount).toLocaleString() + ' withdrawal approved', 'success', '/withdraw');
+    res.redirect('/admin/withdrawals');
+  } catch (e) {
+    console.error('APPROVE WITHDRAWAL ERROR:', e.message, e.stack);
+    res.redirect('/admin/withdrawals?error=' + encodeURIComponent('Could not approve: ' + e.message));
+  }
 });
 
 router.post('/withdrawals/reject/:id', async (req, res) => {
-  const wr = await db.prepare("SELECT * FROM withdrawal_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
-  if (!wr) return res.redirect('/admin/withdrawals');
-  if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/withdrawals?error=blocked');
-  await db.prepare("UPDATE withdrawal_requests SET status = 'rejected' WHERE id = ?").run(req.params.id);
-  if (wr) { auditLog(req.session.user, 'reject', 'withdrawal', wr.id, 'KES ' + wr.amount + ' rejected');
-    await notify(wr.member_id, 'Withdrawal Rejected', 'KES ' + wr.amount.toLocaleString() + ' withdrawal request was rejected', 'error', '/withdraw'); }
-  res.redirect('/admin/withdrawals');
+  try {
+    const wr = await db.prepare("SELECT * FROM withdrawal_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+    if (!wr) return res.redirect('/admin/withdrawals');
+    if (!checkApprovalRight(req.session.user, wr)) return res.redirect('/admin/withdrawals?error=' + encodeURIComponent('You are not allowed to reject this transaction.'));
+    await db.prepare("UPDATE withdrawal_requests SET status = 'rejected' WHERE id = ?").run(req.params.id);
+    auditLog(req.session.user, 'reject', 'withdrawal', wr.id, 'KES ' + wr.amount + ' rejected');
+    await notify(wr.member_id, 'Withdrawal Rejected', 'KES ' + Number(wr.amount).toLocaleString() + ' withdrawal request was rejected', 'error', '/withdraw');
+    res.redirect('/admin/withdrawals');
+  } catch (e) {
+    console.error('REJECT WITHDRAWAL ERROR:', e.message, e.stack);
+    res.redirect('/admin/withdrawals?error=' + encodeURIComponent('Could not reject: ' + e.message));
+  }
 });
 
 module.exports = router;
