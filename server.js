@@ -534,8 +534,14 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 (async () => {
-  await initDatabase();
-  await seedMembers();
+  try {
+    console.log('BOOT: DATABASE_URL set =', !!process.env.DATABASE_URL, '| PORT =', process.env.PORT || 3000);
+    if (process.env.DATABASE_URL) {
+      const u = new URL(process.env.DATABASE_URL.trim());
+      console.log('BOOT: db host =', u.hostname, '| db name =', u.pathname);
+    }
+    await initDatabase();
+    await seedMembers();
 
   const isPg = !!process.env.DATABASE_URL;
   const q = (sql, ...params) => isPg ? db.prepare(sql).run(...params) : db.prepare(sql).run(...params);
@@ -576,4 +582,9 @@ const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`Chama System running at http://localhost:${PORT}`);
   });
+  } catch (e) {
+    console.error('BOOT FAILED:', e.message);
+    console.error(e.stack);
+    process.exit(1);
+  }
 })();
