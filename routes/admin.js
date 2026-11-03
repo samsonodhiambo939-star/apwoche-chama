@@ -320,18 +320,45 @@ router.get('/membercard', async (req, res) => {
 });
 
 router.post('/membercard/assign', async (req, res) => {
-  const { member_id, amount } = req.body;
-  if (!member_id || !amount || amount <= 0) return res.redirect('/admin/membercard?error=invalid');
+  const member_id = Number(req.body.member_id);
+  const amount = parseFloat(req.body.amount);
+  if (!member_id || !amount || amount <= 0 || !isFinite(amount)) {
+    return res.redirect('/admin/membercard?error=invalid');
+  }
+  const isPg = !!process.env.DATABASE_URL;
   try {
-    await db.prepare(`
-      INSERT INTO member_cards (member_id, assigned_amount, paid_amount)
-      VALUES (?, ?, 0)
-      ON CONFLICT(member_id) DO UPDATE SET assigned_amount = assigned_amount + ?
-    `).run(member_id, amount, amount);
-    auditLog(req.session.user, 'assign', 'member_card', member_id, 'KES ' + amount + ' assigned');
+    // Do not rely on ON CONFLICT: older databases may lack the UNIQUE(member_id) constraint.
+    const existing = isPg
+      ? await db.prepare("SELECT id FROM member_cards WHERE member_id = $1").get(member_id)
+      : await db.prepare("SELECT id FROM member_cards WHERE member_id = ?").get(member_id);
+
+    if (existing) {
+      if (isPg) {
+        await db.prepare("UPDATE member_cards SET assigned_amount = assigned_amount + $1 WHERE member_id = $2").run(amount, member_id);
+      } else {
+        await db.prepare("UPDATE member_cards SET assigned_amount = assigned_amount + ? WHERE member_id = ?").run(amount, member_id);
+      }
+    } else {
+      try {
+        if (isPg) {
+          await db.prepare("INSERT INTO member_cards (member_id, assigned_amount, paid_amount) VALUES ($1, $2, 0)").run(member_id, amount);
+        } else {
+          await db.prepare("INSERT INTO member_cards (member_id, assigned_amount, paid_amount) VALUES (?, ?, 0)").run(member_id, amount);
+        }
+      } catch (insertErr) {
+        // Row appeared concurrently (or a duplicate already exists): add onto it instead.
+        console.error('Member card insert fallback:', insertErr.message);
+        if (isPg) {
+          await db.prepare("UPDATE member_cards SET assigned_amount = assigned_amount + $1 WHERE member_id = $2").run(amount, member_id);
+        } else {
+          await db.prepare("UPDATE member_cards SET assigned_amount = assigned_amount + ? WHERE member_id = ?").run(amount, member_id);
+        }
+      }
+    }
+    await auditLog(req.session.user, 'assign', 'member_card', member_id, 'KES ' + amount + ' assigned');
     res.redirect('/admin/membercard?message=assigned');
   } catch (e) {
-    console.error('Member card assign error:', e.message);
+    console.error('Member card assign error:', e.message, e.stack);
     res.redirect('/admin/membercard?error=assign_failed');
   }
 });
